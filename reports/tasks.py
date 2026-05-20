@@ -27,7 +27,6 @@ def refresh_report_read_model_task(self, report_id: str):
         "organization_id": str(report.organization_id),
         "organization_name": report.organization.name,
         "created_by_id": str(report.created_by_id),
-        "created_by_email": report.created_by.email,
         "version": report.version,
         "created_at": report.created_at.isoformat(),
         "updated_at": report.updated_at.isoformat(),

@@ -12,7 +12,7 @@ class Migration(migrations.Migration):
                 ("created_at", models.DateTimeField(auto_now_add=True)),
                 ("updated_at", models.DateTimeField(auto_now=True)),
                 ("name", models.CharField(max_length=255)),
-                ("slug", models.SlugField(unique=True)),
+                ("slug", models.SlugField(max_length=100, unique=True)),
             ],
             options={"ordering": ["name"], "abstract": False},
         ),

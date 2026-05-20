@@ -55,7 +55,7 @@ def test_invalid_status_transition_rejected(analyst_client, analyst, org):
     report = Report.objects.create(organization=org, created_by=analyst)
     response = analyst_client.post(
         f"/api/v1/reports/{report.id}/transition/",
-        {"status": ReportStatus.PUBLISHED},
+        {"status": ReportStatus.REJECTED},
     )
     assert response.status_code == 400
 

@@ -13,6 +13,8 @@ class AppUserManager(BaseUserManager):
     def create_user(self, email, organization, password=None, **extra_fields):
         if not email:
             raise ValueError("Email is required")
+        if not organization:
+            raise ValueError("Organization is required")
         email = self.normalize_email(email)
         extra_fields.setdefault("role", Role.ANALYST)
         extra_fields.setdefault("is_active", True)
@@ -26,8 +28,12 @@ class AppUserManager(BaseUserManager):
         org, _ = Organization.objects.get_or_create(slug="system", defaults={"name": "System"})
         extra_fields.setdefault("role", Role.ADMIN)
         extra_fields.setdefault("is_active", True)
-        extra_fields.setdefault("is_staff", True)
-        extra_fields.setdefault("is_superuser", True)
+        if extra_fields.get("is_staff") is False:
+            raise ValueError("Superuser must have is_staff=True")
+        if extra_fields.get("is_superuser") is False:
+            raise ValueError("Superuser must have is_superuser=True")
+        extra_fields["is_staff"] = True
+        extra_fields["is_superuser"] = True
         return self.create_user(email, org, password, **extra_fields)
 
 

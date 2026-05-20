@@ -66,15 +66,21 @@ class ReportTransitionView(APIView):
     permission_classes = [IsTenantMember]
 
     def post(self, request, id):
-        report = generics.get_object_or_404(
-            Report, id=id, organization=request.user.organization,
-        )
-        self.check_object_permissions(request, report)
-        serializer = ReportStatusTransitionSerializer(
-            data=request.data, context={"report": report},
-        )
-        serializer.is_valid(raise_exception=True)
         with transaction.atomic():
+            try:
+                report = Report.objects.select_for_update().get(
+                    id=id, organization=request.user.organization
+                )
+            except Report.DoesNotExist:
+                return Response(
+                    {"detail": "Not found."},
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+            self.check_object_permissions(request, report)
+            serializer = ReportStatusTransitionSerializer(
+                data=request.data, context={"report": report},
+            )
+            serializer.is_valid(raise_exception=True)
             report.transition_to(serializer.validated_data["status"])
             report.save(update_fields=["status", "version", "updated_at"])
         transaction.on_commit(
