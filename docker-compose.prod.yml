@@ -6,37 +6,34 @@ services:
     environment:
       POSTGRES_DB: aviation_safety
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
     volumes:
       - pg_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
+      interval: 10s
       timeout: 5s
       retries: 5
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
+      interval: 10s
       timeout: 5s
       retries: 5
 
   api:
     build: .
-    command: python manage.py runserver 0.0.0.0:8000
-    volumes:
-      - .:/app
+    command: gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers ${WEB_CONCURRENCY:-3}
     ports:
       - "8000:8000"
     env_file: .env
     environment:
-      DJANGO_SETTINGS_MODULE: config.settings.local
+      DJANGO_SETTINGS_MODULE: config.settings.production
     depends_on:
       db:
         condition: service_healthy
@@ -46,25 +43,9 @@ services:
   worker:
     build: .
     command: celery -A config.celery worker --loglevel=info -Q default
-    volumes:
-      - .:/app
     env_file: .env
     environment:
-      DJANGO_SETTINGS_MODULE: config.settings.local
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-
-  beat:
-    build: .
-    command: celery -A config.celery beat --loglevel=info
-    volumes:
-      - .:/app
-    env_file: .env
-    environment:
-      DJANGO_SETTINGS_MODULE: config.settings.local
+      DJANGO_SETTINGS_MODULE: config.settings.production
     depends_on:
       db:
         condition: service_healthy
@@ -73,3 +54,4 @@ services:
 
 volumes:
   pg_data:
+  redis_data:
