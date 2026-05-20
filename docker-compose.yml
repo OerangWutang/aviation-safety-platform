@@ -21,55 +21,34 @@ services:
     image: redis:7-alpine
     ports:
       - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
 
-  api:
+  web:
     build: .
     command: python manage.py runserver 0.0.0.0:8000
     volumes:
       - .:/app
     ports:
       - "8000:8000"
-    env_file: .env
-    environment:
-      DJANGO_SETTINGS_MODULE: config.settings.local
+    env_file:
+      - .env
     depends_on:
       db:
         condition: service_healthy
       redis:
-        condition: service_healthy
+        condition: service_started
 
-  worker:
+  celery:
     build: .
-    command: celery -A config.celery worker --loglevel=info -Q default
+    command: celery -A config.celery worker -l info
     volumes:
       - .:/app
-    env_file: .env
-    environment:
-      DJANGO_SETTINGS_MODULE: config.settings.local
+    env_file:
+      - .env
     depends_on:
       db:
         condition: service_healthy
       redis:
-        condition: service_healthy
-
-  beat:
-    build: .
-    command: celery -A config.celery beat --loglevel=info
-    volumes:
-      - .:/app
-    env_file: .env
-    environment:
-      DJANGO_SETTINGS_MODULE: config.settings.local
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+        condition: service_started
 
 volumes:
   pg_data:
