@@ -1,4 +1,9 @@
+import environ
 from .base import *  # noqa: F401,F403
+
+env = environ.Env()
+
+SECRET_KEY = env("SECRET_KEY")
 
 DEBUG = False
 SECURE_SSL_REDIRECT = True
