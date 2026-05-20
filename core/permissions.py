@@ -1,4 +1,5 @@
 from rest_framework.permissions import BasePermission, SAFE_METHODS
+from users.models import Role
 
 class IsTenantMember(BasePermission):
     def has_permission(self, request, view):
@@ -9,7 +10,7 @@ class IsTenantMember(BasePermission):
         return org_id is not None and str(org_id) == str(request.user.organization_id)
 
 class IsAdminOrSafetyOfficer(IsTenantMember):
-    WRITE_ROLES = {"admin", "safety_officer"}
+    WRITE_ROLES = {Role.ADMIN, Role.SAFETY_OFFICER}
     def has_permission(self, request, view):
         if not super().has_permission(request, view):
             return False
