@@ -1,44 +1,61 @@
-# Aviation Safety Platform — Backend
+# Aviation Safety Platform
 
-A multi-tenant aviation safety incident reporting platform.
+A Django-based platform for managing aviation safety reports and workflows.
 
-## Stack
+## Features
 
-| Layer | Technology |
-|---|---|
-| API | Django 5.x + Django REST Framework |
-| Auth | Simple JWT |
-| Async | Celery + Redis |
-| Database | PostgreSQL 16 |
-| Cache | Redis |
-| Tests | pytest + pytest-django |
+- **Safety Report Management**: Create, track, and manage aviation safety reports
+- **Workflow Automation**: Automated report processing with Celery tasks
+- **Multi-Organization Support**: Manage multiple aviation organizations
+- **Role-Based Access Control**: Fine-grained permissions per organization
+- **Audit Trail**: Complete audit logging for compliance
+- **REST API**: Full API with JWT authentication
 
-## Quick start
+## Tech Stack
+
+- **Backend**: Django 4.2 + Django REST Framework
+- **Database**: PostgreSQL
+- **Cache/Queue**: Redis + Celery
+- **Auth**: JWT via djangorestframework-simplejwt
+- **Containerization**: Docker + Docker Compose
+
+## Quick Start
 
 ```bash
+# Clone the repository
+git clone https://github.com/yourusername/aviation-safety-platform.git
+cd aviation-safety-platform
+
+# Copy environment variables
 cp .env.example .env
+
+# Start with Docker Compose
 docker-compose up --build
-docker-compose exec api python manage.py migrate
-docker-compose exec api python manage.py createsuperuser
-docker-compose exec api pytest
+
+# Run migrations
+docker-compose exec web python manage.py migrate
+
+# Create superuser
+docker-compose exec web python manage.py createsuperuser
 ```
 
-## API endpoints
+## API Endpoints
 
-| Method | Endpoint | Description |
-|---|---|---|
-| GET | `/api/v1/health/` | Health check (public) |
-| POST | `/api/v1/token/` | Obtain JWT token pair |
-| POST | `/api/v1/token/refresh/` | Refresh JWT access token |
-| GET | `/api/v1/reports/` | List tenant reports |
-| POST | `/api/v1/reports/` | Create a draft report |
-| GET | `/api/v1/reports/{id}/` | Report detail |
-| POST | `/api/v1/reports/{id}/transition/` | Transition report status |
+- `GET /api/reports/` - List safety reports
+- `POST /api/reports/` - Create a new report
+- `GET /api/reports/{id}/` - Get report details
+- `PATCH /api/reports/{id}/` - Update a report
+- `POST /api/reports/{id}/submit/` - Submit report for review
+- `POST /api/reports/{id}/approve/` - Approve a report
+- `GET /api/organizations/` - List organizations
+- `GET /health/` - Health check endpoint
 
-## Phase roadmap
+## Running Tests
 
-- **Phase 1** (current): Auth, organizations, users, reports, read models, Celery, tests
-- **Phase 2**: IngestionPayload, OutboxEvent, S3/MinIO, PgBouncer
-- **Phase 3**: Debezium CDC, event-driven cache invalidation
-- **Phase 4**: pgvector embeddings, HNSW index, semantic search
-- **Phase 5**: Taxonomy nodes, location hierarchy, ltree + PostGIS
+```bash
+docker-compose exec web pytest
+```
+
+## License
+
+MIT

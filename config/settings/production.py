@@ -1,0 +1,17 @@
+from .base import *  # noqa
+import environ
+
+env = environ.Env()
+
+DEBUG = False
+
+ALLOWED_HOSTS = env.list('DJANGO_ALLOWED_HOSTS')
+
+SECURE_BROWSER_XSS_FILTER = True
+X_FRAME_OPTIONS = 'DENY'
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_SSL_REDIRECT = True
+SESSION_COOKIE_SECURE = True
+CSRF_COOKIE_SECURE = True
+
+CORS_ALLOWED_ORIGINS = env.list('CORS_ALLOWED_ORIGINS', default=[])
