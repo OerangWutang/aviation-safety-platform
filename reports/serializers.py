@@ -32,7 +32,7 @@ class ReportDetailSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             "id", "tracking_number", "organization", "created_by",
-            "created_at", "updated_at", "version",
+            "created_at", "updated_at", "status", "version",
         ]
 
     def get_allowed_transitions(self, obj) -> list[str]:

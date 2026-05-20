@@ -61,6 +61,20 @@ def test_invalid_status_transition_rejected(analyst_client, analyst, org):
 
 
 @pytest.mark.django_db
+def test_report_detail_cannot_update_status_directly(analyst_client, analyst, org):
+    report = Report.objects.create(organization=org, created_by=analyst)
+    response = analyst_client.patch(
+        f"/api/v1/reports/{report.id}/",
+        {"status": ReportStatus.UNDER_REVIEW, "narrative": "Updated narrative"},
+    )
+    assert response.status_code == 200
+    report.refresh_from_db()
+    assert report.status == ReportStatus.DRAFT
+    assert report.version == 1
+    assert report.narrative == "Updated narrative"
+
+
+@pytest.mark.django_db
 def test_cross_tenant_report_not_accessible(api_client, db):
     from organizations.models import Organization
     from users.models import AppUser, Role
