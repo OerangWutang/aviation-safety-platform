@@ -96,6 +96,7 @@ async def test_auth_rejects_previous_hash_when_previous_secret_not_set(monkeypat
     dep_module.clear_auth_cache()
 
     plain_key = "legacy-client-key"
+
     @asynccontextmanager
     async def _fake_session_factory():
         # _resolve_api_key will query using only current hash, so this row should not match.
