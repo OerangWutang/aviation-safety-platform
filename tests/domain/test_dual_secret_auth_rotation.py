@@ -87,7 +87,6 @@ async def test_auth_accepts_hash_with_previous_secret(monkeypatch):
 async def test_auth_rejects_previous_hash_when_previous_secret_not_set(monkeypatch):
     _set_env(monkeypatch)
     current = "a" * 64
-    previous = "b" * 64
     monkeypatch.setenv("API_KEY_HASH_SECRET", current)
     monkeypatch.delenv("API_KEY_HASH_SECRET_PREVIOUS", raising=False)
     get_settings.cache_clear()
