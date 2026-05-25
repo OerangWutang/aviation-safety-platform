@@ -1,0 +1,387 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+jobs:
+  # ── Fast checks (no DB) ─────────────────────────────────────────────────
+  lint-and-typecheck:
+    name: Lint & type check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: No build-artifact pollution in committed source tree
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          # Run before dependency installation and bytecode-producing checks.
+          # GitHub's fresh checkout should contain source only; this catches
+          # accidental committed artifacts without failing on CI-generated files.
+          bad = (
+              list(Path("src").glob("*.egg-info")) +
+              list(Path("src").glob("*.egg-link")) +
+              list(Path(".").glob("*.egg-info")) +
+              list(Path("src").glob("**/__pycache__")) +
+              list(Path("src").glob("**/*.pyc"))
+          )
+          if bad:
+              paths = "\n  ".join(str(p) for p in bad)
+              raise SystemExit(
+                  f"Build artifacts found in source tree — remove before packaging:\n  {paths}"
+              )
+          PY
+
+      - name: Install build tools only (no editable install yet)
+        run: pip install -r requirements-dev.txt
+
+      - name: Compile check
+        run: PYTHONDONTWRITEBYTECODE=1 python -m compileall -q src tests alembic
+
+      - name: Editable install (required for mypy and ruff imports)
+        run: pip install -e . --no-deps
+
+      - name: README migration head matches Alembic
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          readme = Path("README.md").read_text()
+          match = re.search(r"current head is `([^`]+)`", readme)
+          if not match:
+              raise SystemExit("README does not declare the current migration head")
+          declared = match.group(1)
+
+          versions = Path("alembic/versions")
+          revisions = {}
+          down_revisions = set()
+          for path in versions.glob("*.py"):
+              text = path.read_text()
+              rev = re.search(r"^revision\s*=\s*['\"]([^'\"]+)['\"]", text, re.M)
+              down = re.search(r"^down_revision\s*=\s*['\"]?([^'\"\n)]+)", text, re.M)
+              if rev:
+                  revisions[rev.group(1)] = path.stem
+              if down and down.group(1) not in {"None", "null"}:
+                  down_revisions.add(down.group(1))
+          heads = sorted(set(revisions) - down_revisions)
+          if len(heads) != 1:
+              raise SystemExit(f"Expected one Alembic head, found {heads}")
+          actual = revisions[heads[0]]
+          if declared != actual:
+              raise SystemExit(f"README head {declared!r} != actual head {actual!r}")
+          PY
+
+      - name: Ruff lint
+        run: ruff check .
+
+      - name: Ruff format
+        run: ruff format --check .
+
+      - name: Mypy
+        run: PYTHONPATH=src mypy src
+
+  lock-check:
+    name: Lock files up to date
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install pip-tools
+        run: pip install pip-tools
+
+      - name: Regenerate lock files
+        run: |
+          pip-compile --no-emit-index-url --no-emit-trusted-host --strip-extras -o requirements.txt requirements.in
+          pip-compile --no-emit-index-url --no-emit-trusted-host --strip-extras -o requirements-dev.txt requirements-dev.in
+
+      - name: Fail if lock files are stale
+        run: |
+          git diff --exit-code requirements.txt requirements-dev.txt \
+            || (echo "Lock files are out of date. Run 'make lock' and commit the result." && exit 1)
+
+  unit-tests:
+    name: Unit tests
+    needs: [lint-and-typecheck, lock-check]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements-dev.txt
+          pip install -e . --no-deps
+
+      - name: Run unit tests
+        run: |
+          PYTHONPATH=src pytest \
+            --no-cov \
+            tests/domain/ \
+            tests/application/ \
+            tests/infrastructure/ \
+            --tb=short \
+            -q
+
+      - name: Run API smoke tests (no DB)
+        run: |
+          PYTHONPATH=src pytest \
+            --no-cov \
+            tests/api/ \
+            --tb=short \
+            -q
+
+
+  docker-build:
+    name: Docker build & image scan
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Warn if base image is not digest-pinned
+        run: |
+          # Unpinned base images allow silent upstream changes to alter the
+          # built artifact.  This step warns but does not fail; pin the digest
+          # before shipping to production:
+          #   docker inspect --format='{{index .RepoDigests 0}}' python:3.12-slim
+          if grep -E "^FROM " Dockerfile | grep -qv "@sha256:"; then
+            echo "::warning file=Dockerfile::Base image(s) not pinned by digest. Pin before production deploy."
+            grep -E "^FROM " Dockerfile
+          else
+            echo "Base images are digest-pinned ✓"
+          fi
+
+      - name: Build production image
+        run: docker build -t atlas-backend:ci .
+      - name: Scan image with Trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: atlas-backend:ci
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+  security-scans:
+    name: Supply-chain & secret scans
+    needs: lint-and-typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Secret scan with Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Filesystem vulnerability scan with Trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+  # ── Integration tests (with PostGIS) ───────────────────────────────────
+  integration-tests:
+    name: Integration tests
+    needs: unit-tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: atlas_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d atlas_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://atlas_app_test:atlas_app_test@localhost:5432/atlas_test
+      TENANT_DATABASE_URL: postgresql+asyncpg://atlas_app_test:atlas_app_test@localhost:5432/atlas_test
+      SYSTEM_DATABASE_URL: postgresql+asyncpg://atlas_app_test:atlas_app_test@localhost:5432/atlas_test
+      DATABASE_SYNC_URL: postgresql://postgres:postgres@localhost:5432/atlas_test
+      TEST_DATABASE_URL: postgresql+asyncpg://atlas_app_test:atlas_app_test@localhost:5432/atlas_test
+      ATLAS_ALLOW_DB_TRUNCATE: "1"
+      ATLAS_RLS_TEST_MUST_RUN: "1"
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: atlas_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements-dev.txt
+          pip install -e . --no-deps
+
+      - name: Apply migrations
+        run: alembic upgrade head
+
+      - name: Verify migrations apply from scratch
+        run: |
+          alembic downgrade base
+          alembic upgrade head
+
+      - name: Configure non-bypass app test role
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d atlas_test <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'atlas_app_test') THEN
+              CREATE ROLE atlas_app_test LOGIN PASSWORD 'atlas_app_test' NOSUPERUSER NOBYPASSRLS;
+            ELSE
+              ALTER ROLE atlas_app_test LOGIN PASSWORD 'atlas_app_test' NOSUPERUSER NOBYPASSRLS;
+            END IF;
+          END
+          $$;
+          GRANT CONNECT ON DATABASE atlas_test TO atlas_app_test;
+          GRANT USAGE, CREATE ON SCHEMA public TO atlas_app_test;
+          GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO atlas_app_test;
+          GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO atlas_app_test;
+          GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO atlas_app_test;
+          SQL
+
+      - name: Verify app role does not bypass RLS
+        env:
+          PGPASSWORD: atlas_app_test
+        run: |
+          psql -h localhost -U atlas_app_test -d atlas_test -tAc \
+            "SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user" \
+            | grep -qx f
+
+      - name: Run integration tests
+        run: |
+          PYTHONPATH=src pytest \
+            --run-integration \
+            -m integration \
+            --tb=short \
+            -v
+
+  # ── Coverage report ─────────────────────────────────────────────────────
+  coverage:
+    name: Coverage
+    needs: [unit-tests, integration-tests]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: atlas_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d atlas_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://atlas_app_test:atlas_app_test@localhost:5432/atlas_test
+      TENANT_DATABASE_URL: postgresql+asyncpg://atlas_app_test:atlas_app_test@localhost:5432/atlas_test
+      SYSTEM_DATABASE_URL: postgresql+asyncpg://atlas_app_test:atlas_app_test@localhost:5432/atlas_test
+      DATABASE_SYNC_URL: postgresql://postgres:postgres@localhost:5432/atlas_test
+      TEST_DATABASE_URL: postgresql+asyncpg://atlas_app_test:atlas_app_test@localhost:5432/atlas_test
+      ATLAS_ALLOW_DB_TRUNCATE: "1"
+      ATLAS_RLS_TEST_MUST_RUN: "1"
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: atlas_test
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements-dev.txt
+          pip install -e . --no-deps
+
+      - name: Apply migrations
+        run: alembic upgrade head
+
+      - name: Configure non-bypass app test role
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d atlas_test <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'atlas_app_test') THEN
+              CREATE ROLE atlas_app_test LOGIN PASSWORD 'atlas_app_test' NOSUPERUSER NOBYPASSRLS;
+            ELSE
+              ALTER ROLE atlas_app_test LOGIN PASSWORD 'atlas_app_test' NOSUPERUSER NOBYPASSRLS;
+            END IF;
+          END
+          $$;
+          GRANT CONNECT ON DATABASE atlas_test TO atlas_app_test;
+          GRANT USAGE, CREATE ON SCHEMA public TO atlas_app_test;
+          GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO atlas_app_test;
+          GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO atlas_app_test;
+          GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO atlas_app_test;
+          SQL
+
+      - name: Verify app role does not bypass RLS
+        env:
+          PGPASSWORD: atlas_app_test
+        run: |
+          psql -h localhost -U atlas_app_test -d atlas_test -tAc \
+            "SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user" \
+            | grep -qx f
+
+      - name: Run full suite with coverage
+        run: |
+          PYTHONPATH=src pytest \
+            --run-integration \
+            --cov=src/atlas \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            --tb=short
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml

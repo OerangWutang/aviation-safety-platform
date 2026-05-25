@@ -1,0 +1,234 @@
+# Atlas free/self-hosted production stack.
+#
+# Exposes only Caddy on ports 80/443. Postgres, Redis, PgBouncer, API, and
+# worker containers are reachable only on the private Docker network.
+
+x-default-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  preflight:
+    image: alpine:3.20
+    logging: *default-logging
+    restart: "no"
+    volumes:
+      - ./.env:/run/atlas/.env:ro
+      - ./check-env.sh:/usr/local/bin/check-env.sh:ro
+    command: ["sh", "/usr/local/bin/check-env.sh", "/run/atlas/.env"]
+
+  db:
+    image: postgis/postgis:16-3.4
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      preflight:
+        condition: service_completed_successfully
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - atlas-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  db-roles:
+    image: postgis/postgis:16-3.4
+    logging: *default-logging
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      ATLAS_TENANT_DB_USER: ${ATLAS_TENANT_DB_USER}
+      ATLAS_TENANT_DB_PASSWORD: ${ATLAS_TENANT_DB_PASSWORD}
+      ATLAS_SYSTEM_DB_USER: ${ATLAS_SYSTEM_DB_USER}
+      ATLAS_SYSTEM_DB_PASSWORD: ${ATLAS_SYSTEM_DB_PASSWORD}
+    volumes:
+      - ./init-db-roles.sh:/usr/local/bin/init-db-roles.sh:ro
+    command: ["sh", "/usr/local/bin/init-db-roles.sh"]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    logging: *default-logging
+    depends_on:
+      preflight:
+        condition: service_completed_successfully
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 20
+
+  pgbouncer:
+    image: edoburu/pgbouncer:1.24.1-p1
+    logging: *default-logging
+    restart: unless-stopped
+    depends_on:
+      db-roles:
+        condition: service_completed_successfully
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: ${ATLAS_SYSTEM_DB_USER}
+      DB_PASSWORD: ${ATLAS_SYSTEM_DB_PASSWORD}
+      DB_NAME: ${POSTGRES_DB}
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: ${PGBOUNCER_MAX_CLIENT_CONN:-200}
+      DEFAULT_POOL_SIZE: ${PGBOUNCER_DEFAULT_POOL_SIZE:-20}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U $${DB_USER} -d $${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    image: ${ATLAS_IMAGE:-atlas-backend:local}
+    logging: *default-logging
+    healthcheck:
+      disable: true
+    depends_on:
+      db-roles:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_SYNC_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      POSTGRES_DB: ${POSTGRES_DB}
+      ATLAS_TENANT_DB_USER: ${ATLAS_TENANT_DB_USER}
+      ATLAS_SYSTEM_DB_USER: ${ATLAS_SYSTEM_DB_USER}
+    volumes:
+      - ./grant-runtime-roles.py:/usr/local/bin/grant-runtime-roles.py:ro
+    command: sh -ec 'alembic upgrade head && python /usr/local/bin/grant-runtime-roles.py'
+    restart: "no"
+
+  api:
+    image: ${ATLAS_IMAGE:-atlas-backend:local}
+    logging: *default-logging
+    restart: unless-stopped
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      ENVIRONMENT: production
+      DATABASE_URL: postgresql+asyncpg://${ATLAS_SYSTEM_DB_USER}:${ATLAS_SYSTEM_DB_PASSWORD}@pgbouncer:5432/${POSTGRES_DB}
+      SYSTEM_DATABASE_URL: postgresql+asyncpg://${ATLAS_SYSTEM_DB_USER}:${ATLAS_SYSTEM_DB_PASSWORD}@pgbouncer:5432/${POSTGRES_DB}
+      TENANT_DATABASE_URL: postgresql+asyncpg://${ATLAS_TENANT_DB_USER}:${ATLAS_TENANT_DB_PASSWORD}@db:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      DB_USE_NULL_POOL: "true"
+      API_KEY_HASH_SECRET: ${API_KEY_HASH_SECRET}
+      ATLAS_DOMAIN: ${ATLAS_DOMAIN}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
+      API_DOCS_ENABLED: "false"
+      HSTS_ENABLED: ${HSTS_ENABLED:-true}
+      PROMETHEUS_ALLOWED_CIDRS: ${PROMETHEUS_ALLOWED_CIDRS:-127.0.0.1/32}
+      PROMETHEUS_BEARER_TOKEN: ${PROMETHEUS_BEARER_TOKEN:-}
+      PROMETHEUS_EXPENSIVE_DOMAIN_METRICS_ENABLED: ${PROMETHEUS_EXPENSIVE_DOMAIN_METRICS_ENABLED:-false}
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      RATE_LIMIT_REQUESTS: ${RATE_LIMIT_REQUESTS:-0}
+      RATE_LIMIT_IN_MEMORY_ENABLED: ${RATE_LIMIT_IN_MEMORY_ENABLED:-false}
+      ADMIN_ALLOW_UNBOUNDED_PROJECTION_REBUILDS: ${ADMIN_ALLOW_UNBOUNDED_PROJECTION_REBUILDS:-false}
+      ADMIN_MAX_PROJECTION_REBUILD_EVENTS: ${ADMIN_MAX_PROJECTION_REBUILD_EVENTS:-10000}
+    expose:
+      - "8000"
+    command: gunicorn atlas.presentation.api.app:app --config gunicorn_conf.py --worker-tmp-dir /dev/shm
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >
+          python -c 'import os, urllib.request; host=os.environ.get("ATLAS_DOMAIN") or (os.environ.get("ALLOWED_HOSTS", "localhost").split(",")[0].strip() or "localhost"); req=urllib.request.Request("http://127.0.0.1:8000/health", headers={"Host": host}); urllib.request.urlopen(req, timeout=3).read()'
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  worker:
+    image: ${ATLAS_IMAGE:-atlas-backend:local}
+    logging: *default-logging
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      ENVIRONMENT: production
+      DATABASE_URL: postgresql+asyncpg://${ATLAS_SYSTEM_DB_USER}:${ATLAS_SYSTEM_DB_PASSWORD}@pgbouncer:5432/${POSTGRES_DB}
+      SYSTEM_DATABASE_URL: postgresql+asyncpg://${ATLAS_SYSTEM_DB_USER}:${ATLAS_SYSTEM_DB_PASSWORD}@pgbouncer:5432/${POSTGRES_DB}
+      TENANT_DATABASE_URL: postgresql+asyncpg://${ATLAS_TENANT_DB_USER}:${ATLAS_TENANT_DB_PASSWORD}@db:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      DB_USE_NULL_POOL: "true"
+      API_KEY_HASH_SECRET: ${API_KEY_HASH_SECRET}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    command: atlas outbox-worker --sleep-seconds 5
+
+  # Hermes crawl worker.  Runs in its own container so that crawl pressure
+  # (network I/O, retry storms, oversize responses) cannot interfere with the
+  # outbox worker that drives projection/event delivery.  Wire HERMES_ALLOWED_HOSTS
+  # to the comma-separated list of domains Atlas is permitted to fetch from;
+  # without it the fetcher falls back to the IP-range deny-list only.
+  hermes-worker:
+    image: ${ATLAS_IMAGE:-atlas-backend:local}
+    logging: *default-logging
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+    depends_on:
+      pgbouncer:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      ENVIRONMENT: production
+      DATABASE_URL: postgresql+asyncpg://${ATLAS_SYSTEM_DB_USER}:${ATLAS_SYSTEM_DB_PASSWORD}@pgbouncer:5432/${POSTGRES_DB}
+      SYSTEM_DATABASE_URL: postgresql+asyncpg://${ATLAS_SYSTEM_DB_USER}:${ATLAS_SYSTEM_DB_PASSWORD}@pgbouncer:5432/${POSTGRES_DB}
+      TENANT_DATABASE_URL: postgresql+asyncpg://${ATLAS_TENANT_DB_USER}:${ATLAS_TENANT_DB_PASSWORD}@db:5432/${POSTGRES_DB}
+      REDIS_URL: redis://redis:6379/0
+      DB_USE_NULL_POOL: "true"
+      API_KEY_HASH_SECRET: ${API_KEY_HASH_SECRET}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      HERMES_ALLOWED_HOSTS: ${HERMES_ALLOWED_HOSTS:-}
+    command: >
+      atlas hermes-worker
+      --sleep-seconds ${HERMES_WORKER_SLEEP_SECONDS:-5}
+      --batch-limit ${HERMES_WORKER_BATCH_LIMIT:-5}
+      --lease-seconds ${HERMES_WORKER_LEASE_SECONDS:-300}
+      --recover-limit ${HERMES_WORKER_RECOVER_LIMIT:-100}
+
+  caddy:
+    image: caddy:2-alpine
+    logging: *default-logging
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      ATLAS_DOMAIN: ${ATLAS_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  atlas-db-data:
+  caddy-data:
+  caddy-config:

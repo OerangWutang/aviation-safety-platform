@@ -1,0 +1,39 @@
+groups:
+  - name: atlas-operational
+    interval: 30s
+    rules:
+      - alert: AtlasOutboxBacklogAgeHigh
+        expr: atlas_outbox_oldest_unprocessed_age_seconds > 300
+        for: 10m
+        labels:
+          severity: warning
+          service: atlas
+        annotations:
+          summary: Atlas outbox backlog age is high
+          description: >-
+            Oldest unprocessed outbox event has been older than 300 seconds for at
+            least 10 minutes. Check worker throughput and database saturation.
+
+      - alert: AtlasOutboxWorkerHeartbeatMissing
+        expr: atlas_outbox_worker_heartbeat_present == 0
+        for: 5m
+        labels:
+          severity: critical
+          service: atlas
+        annotations:
+          summary: Atlas outbox worker heartbeat missing
+          description: >-
+            No outbox worker heartbeat has been observed for at least 5 minutes.
+            Confirm worker processes are running and can write to Postgres.
+
+      - alert: AtlasOperationalMetricsRefreshFailed
+        expr: atlas_operational_metrics_refresh_success == 0
+        for: 5m
+        labels:
+          severity: warning
+          service: atlas
+        annotations:
+          summary: Atlas operational metrics refresh failing
+          description: >-
+            Atlas failed to refresh DB-backed operational metrics for at least 5
+            minutes. Metrics may be stale or incomplete.

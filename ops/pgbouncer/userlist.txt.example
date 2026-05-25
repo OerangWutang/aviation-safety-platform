@@ -1,0 +1,3 @@
+# Replace with real SCRAM credentials and mount as /etc/pgbouncer/userlist.txt.
+# Generate using your Postgres secret management flow; do not commit real hashes.
+"atlas" "SCRAM-SHA-256$4096:..."

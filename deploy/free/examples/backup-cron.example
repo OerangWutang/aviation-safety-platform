@@ -1,0 +1,13 @@
+# Example crontab entry for Atlas free/self-hosted backups.
+# Run `crontab -e` on the VPS and adapt the path/user.
+#
+# This writes compressed backups under deploy/free/backups. You should still
+# copy them off-server with rsync, rclone, restic, or your provider snapshots.
+# A disk on the same free VPS is not a backup.
+
+15 3 * * * cd /opt/atlas/deploy/free && mkdir -p backups && ./backup-postgres.sh >> ./backups/backup.log 2>&1
+45 3 * * * cd /opt/atlas/deploy/free && mkdir -p backups && ./check-disk.sh . >> ./backups/disk.log 2>&1
+46 3 * * * cd /opt/atlas/deploy/free && mkdir -p backups && ATLAS_BACKUP_MAX_AGE_HOURS=48 ./check-latest-backup.sh ./backups >> ./backups/freshness.log 2>&1
+
+# Prune local backups older than BACKUP_RETENTION_DAYS, default 14.
+50 3 * * * cd /opt/atlas/deploy/free && mkdir -p backups && BACKUP_RETENTION_DAYS=14 ./prune-backups.sh ./backups >> ./backups/prune.log 2>&1

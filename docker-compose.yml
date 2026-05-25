@@ -1,0 +1,106 @@
+# Atlas Backend — local development stack.
+#
+# Used by `make up`, the README quick-start, and optional full-stack local runs.
+# The PostGIS image is required because migration 001 runs CREATE EXTENSION
+# postgis.
+#
+# Production deployments do NOT use this file: the API container, secrets,
+# and the database are owned by the deployment environment. This compose
+# stack is for local-only convenience.
+
+x-default-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    container_name: atlas-db
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-atlas}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-atlas}
+      POSTGRES_DB: ${POSTGRES_DB:-atlas}
+    ports:
+      # Localhost-only for developer tools. Do not expose Postgres publicly.
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - atlas-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    profiles: ["full"]
+    logging: *default-logging
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-atlas}:${POSTGRES_PASSWORD:-atlas}@db:5432/${POSTGRES_DB:-atlas}
+      DATABASE_SYNC_URL: postgresql://${POSTGRES_USER:-atlas}:${POSTGRES_PASSWORD:-atlas}@db:5432/${POSTGRES_DB:-atlas}
+      POSTGRES_USER: ${POSTGRES_USER:-atlas}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-atlas}
+      POSTGRES_DB: ${POSTGRES_DB:-atlas}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+      GUNICORN_KEEPALIVE_SECONDS: ${GUNICORN_KEEPALIVE_SECONDS:-55}
+      GUNICORN_MAX_REQUESTS: ${GUNICORN_MAX_REQUESTS:-10000}
+      GUNICORN_MAX_REQUESTS_JITTER: ${GUNICORN_MAX_REQUESTS_JITTER:-1000}
+      PROMETHEUS_METRICS_ENABLED: ${PROMETHEUS_METRICS_ENABLED:-true}
+      PROMETHEUS_DOMAIN_METRICS_ENABLED: ${PROMETHEUS_DOMAIN_METRICS_ENABLED:-true}
+    ports:
+      - "8000:8000"
+    command: gunicorn atlas.presentation.api.app:app --config gunicorn_conf.py --worker-tmp-dir /dev/shm
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:8000/health\", timeout=3).read()'"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+  redis:
+    profiles: ["full"]
+    image: redis:7-alpine
+    logging: *default-logging
+    container_name: atlas-redis
+    restart: unless-stopped
+    ports:
+      # Localhost-only for developer tools. Do not expose Redis publicly.
+      - "127.0.0.1:6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Hermes crawl worker (developer convenience).  Enabled under the ``full``
+  # profile alongside api/redis so ``docker compose --profile full up`` boots
+  # the complete stack.  Production runs the equivalent service from
+  # deploy/free/docker-compose.yml.
+  hermes-worker:
+    profiles: ["full"]
+    logging: *default-logging
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-atlas}:${POSTGRES_PASSWORD:-atlas}@db:5432/${POSTGRES_DB:-atlas}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      HERMES_ALLOWED_HOSTS: ${HERMES_ALLOWED_HOSTS:-}
+    command: atlas hermes-worker --sleep-seconds 5 --batch-limit 5
+
+volumes:
+  atlas-db-data:
+    name: atlas-db-data

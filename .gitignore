@@ -1,0 +1,20 @@
+# Python/cache artifacts
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Packaging/build artifacts
+build/
+dist/
+*.egg-info/
+
+# Local environment/runtime files
+.env
+.env.*
+!.env.example
+*.log
