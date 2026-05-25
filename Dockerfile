@@ -12,7 +12,7 @@
 #
 # Then replace `python:3.12-slim` with `python:3.12-slim@sha256:<digest>` in
 # both FROM lines.  Re-run on each intentional base image update.
-FROM python:3.12-slim@sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203 AS builder
+FROM python:3.14-slim@sha256:c845af9399020c7e562969a13689e929074a10fd057acd1b1fad06a2fb068e97 AS builder
 
 ENV PIP_NO_CACHE_DIR=1
 
@@ -26,7 +26,7 @@ RUN pip install --no-cache-dir build \
 
 
 # ── Stage 2: production runtime ─────────────────────────────────────────────
-FROM python:3.12-slim@sha256:090ba77e2958f6af52a5341f788b50b032dd4ca28377d2893dcf1ecbdfdfe203
+FROM python:3.14-slim@sha256:c845af9399020c7e562969a13689e929074a10fd057acd1b1fad06a2fb068e97
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
