@@ -377,6 +377,7 @@ jobs:
         run: |
           PYTHONPATH=src pytest \
             --run-integration \
+            -m "not release" \
             --cov=src/atlas \
             --cov-report=term-missing \
             --cov-report=xml \
