@@ -2,7 +2,7 @@
 # Pin with: make lock -> generates requirements.txt
 # Do not install from this file in CI or Docker - use requirements.txt instead.
 fastapi>=0.121
-starlette>=0.46.0,<1.0.0  # prometheus-fastapi-instrumentator 7.x requires starlette<1.0.0;
+starlette>=0.46.0,<2.0.0  # prometheus-fastapi-instrumentator 7.x requires starlette<1.0.0;
                            # PYSEC-2026-161 (Host header path injection, fix in 1.0.1) is
                            # blocked by this constraint. Mitigation: TrustedHostMiddleware
                            # validates Host before URL reconstruction in all production
