@@ -9,7 +9,7 @@ description = "Claims-based aviation accident data integrity backend"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.121",
-    "starlette>=0.46.0,<1.0.0",  # prometheus-fastapi-instrumentator 7.x requires starlette<1.0.0
+    "starlette>=0.46.0,<2.0.0",  # prometheus-fastapi-instrumentator 7.x requires starlette<1.0.0
     "uvicorn[standard]>=0.30",
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
